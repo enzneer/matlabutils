@@ -31,7 +31,12 @@ function [nodeMap, nodeList, edgeList] = buildGraphFromBlocks(blocks)
         block = blocks{i};
         blockName = getfullname(block);
         blockType = get_param(block, 'BlockType');
-
+        if strcmp(blockType, 'Inport') || strcmp(blockType, 'Outport')
+            if isBlockInsideSubsystem(block)
+                %TODO control port
+                continue;
+            end
+        end
         % Assign ID to block node
         if ~isKey(nodeMap, blockName)
             nodeMap(blockName) = nextId;
@@ -44,6 +49,13 @@ function [nodeMap, nodeList, edgeList] = buildGraphFromBlocks(blocks)
         [nodeMap, nodeList, edgeList, nextId] = addOutputEdges(blockName, ports, nodeMap, nodeList, edgeList, nextId);
     end
 end
+
+function isInside = isBlockInsideSubsystem(blockPath)
+    % Returns true if the block is inside a subsystem, false if at root level
+    parentPath = get_param(blockPath, 'Parent');
+    isInside = ~strcmp(parentPath, bdroot(blockPath));
+end
+
 
 function [nodeMap, nodeList, edgeList, nextId] = addInputEdges(blockName, ports, nodeMap, nodeList, edgeList, nextId)
     blockType = get_param(blockName, 'BlockType');
@@ -80,7 +92,7 @@ function [nodeMap, nodeList, edgeList, nextId] = handleInputLineSource(inNodeNam
 
         portNum = get_param(srcPort, 'PortNumber');
 
-        if strcmp(srcBlockType, 'SubSystem') || strcmp(srcBlockType, 'Outport')
+        if strcmp(srcBlockType, 'SubSystem') || strcmp(srcBlockType, 'Inport')
             realSrcPorts = traceThroughOutport(srcBlock, portNum);
             for k = 1:length(realSrcPorts)
                 realSrcBlock = get_param(realSrcPorts{k}, 'Parent');
@@ -158,7 +170,7 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
         dstBlockType = get_param(dstBlock, 'BlockType');
         portNum = get_param(dstPorts{j}, 'PortNumber');
 
-        if strcmp(dstBlockType, 'SubSystem') || strcmp(dstBlockType, 'Inport')
+        if strcmp(dstBlockType, 'SubSystem') || strcmp(dstBlockType, 'Outport')
             realDstPorts = traceThroughInport(dstBlock, portNum);
             for k = 1:length(realDstPorts)
                 realDstBlock = get_param(realDstPorts{k}, 'Parent');
