@@ -190,9 +190,11 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
     for j = 1:length(dstPorts)
         dstBlock = get_param(dstPorts{j}, 'Parent');
         dstBlockType = get_param(dstBlock, 'BlockType');
+        portNum = get_param(dstPorts{j}, 'PortNumber');
 
-        if strcmp(dstBlockType, 'SubSystem')
-            portNum = get_param(dstPorts{j}, 'PortNumber');
+        [shouldSkip, traceThrough] = shouldSkipOrTraceBlock(dstBlockType);
+
+        if traceThrough
             realDstPorts = traceThroughInport(dstBlock, portNum);
             for k = 1:length(realDstPorts)
                 realDstBlock = get_param(realDstPorts{k}, 'Parent');
@@ -205,10 +207,8 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
                 edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(dstNodeName));
             end
 
-        elseif ismember(dstBlockType, {'Inport', 'Enable', 'Trigger', 'Action'})
-            % Skip edge to subsystem port block
-            % Instead, trace through to the actual destination
-            portNum = get_param(dstPorts{j}, 'PortNumber');
+        elseif strcmp(dstBlockType, 'Outport')
+            % Trace through Outport to find internal source
             realDstPorts = traceThroughInport(dstBlock, portNum);
             for k = 1:length(realDstPorts)
                 realDstBlock = get_param(realDstPorts{k}, 'Parent');
@@ -221,7 +221,7 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
                 edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(dstNodeName));
             end
 
-        else
+        elseif ~shouldSkip
             dstBlockName = getfullname(dstBlock);
             dstPortNum = get_param(dstPorts{j}, 'PortNumber');
             dstNodeName = sprintf('%s_in%d', dstBlockName, dstPortNum);
@@ -233,6 +233,22 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
     end
 end
 
+function [shouldSkip, traceThrough] = shouldSkipOrTraceBlock(blockType)
+    traceThroughTypes = {'Inport', 'Enable', 'Trigger', 'Action'};
+    skipTypes = {'Outport'};
+
+    if ismember(blockType, traceThroughTypes)
+        shouldSkip = false;
+        traceThrough = true;
+    elseif ismember(blockType, skipTypes)
+        shouldSkip = true;
+        traceThrough = false;
+    else
+        shouldSkip = false;
+        traceThrough = false;
+    end
+end
+
 
 function graph = finalizeGraph(nodeList, edgeList)
     graph = struct();
@@ -241,16 +257,54 @@ function graph = finalizeGraph(nodeList, edgeList)
 end
 
 function writeGraphToJSON(graph, modelName)
+    % Write standard graph with numeric edges
     jsonStr = jsonencode(graph);
     jsonStr = prettyPrintJSON(jsonStr);
     fileName = [modelName '_graph.json'];
+    writeToFile(fileName, jsonStr);
+
+    % Create verbose graph with named edges
+    verboseGraph = graph;
+    verboseGraph.Edges = createVerboseEdges(graph);
+    verboseStr = jsonencode(verboseGraph);
+    verboseStr = prettyPrintJSON(verboseStr);
+    verboseFileName = [modelName '_graph_verbose.json'];
+    writeToFile(verboseFileName, verboseStr);
+end
+
+function writeToFile(fileName, content)
     fid = fopen(fileName, 'w');
     if fid == -1
         error('Cannot create JSON file: %s', fileName);
     end
-    fprintf(fid, '%s', jsonStr);
+    fprintf(fid, '%s', content);
     fclose(fid);
 end
+
+function verboseEdges = createVerboseEdges(graph)
+    % Build ID to formatted name map
+    idToName = containers.Map('KeyType', 'double', 'ValueType', 'char');
+    for i = 1:length(graph.Nodes)
+        node = graph.Nodes{i};
+        if strcmp(node.nodeType, 'port')
+            formattedName = sprintf('%s:%s:%d', node.name, node.type, node.portNumber);
+        else
+            formattedName = node.name;
+        end
+        idToName(node.id) = formattedName;
+    end
+
+    % Replace numeric IDs with formatted names
+    verboseEdges = cell(size(graph.Edges, 1), 1);
+    for i = 1:size(graph.Edges, 1)
+        srcId = graph.Edges(i, 1);
+        dstId = graph.Edges(i, 2);
+        verboseEdges{i} = struct( ...
+            'source', idToName(srcId), ...
+            'target', idToName(dstId));
+    end
+end
+
 
 function prettyStr = prettyPrintJSON(jsonStr)
     indent = '    ';
@@ -317,7 +371,8 @@ function dstPorts = traceThroughInport(subsystem, portNum)
 
     for i = 1:length(inports)
         if str2double(get_param(inports{i}, 'Port')) == portNum
-            outLine = get_param(get_param(inports{i}, 'PortHandles').Outport, 'Line');
+            portHandles = get_param(inports{i}, 'PortHandles');
+            outLine = get_param(portHandles.Outport, 'Line');
             if outLine ~= -1 && outLine ~= 0
                 nextDstPorts = get_param(outLine, 'DstPortHandle');
                 if ~iscell(nextDstPorts)
@@ -325,7 +380,8 @@ function dstPorts = traceThroughInport(subsystem, portNum)
                 end
                 for j = 1:length(nextDstPorts)
                     dstBlock = get_param(nextDstPorts{j}, 'Parent');
-                    if strcmp(get_param(dstBlock, 'BlockType'), 'SubSystem')
+                    dstBlockType = get_param(dstBlock, 'BlockType');
+                    if strcmp(dstBlockType, 'SubSystem')
                         nestedPortNum = get_param(nextDstPorts{j}, 'PortNumber');
                         nestedDstPorts = traceThroughInport(dstBlock, nestedPortNum);
                         dstPorts = [dstPorts nestedDstPorts];
@@ -361,5 +417,4 @@ function srcPorts = traceThroughOutport(subsystem, portNum)
         end
     end
 end
-
 
