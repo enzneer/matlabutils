@@ -46,18 +46,20 @@ function [nodeMap, nodeList, edgeList] = buildGraphFromBlocks(blocks)
 end
 
 function [nodeMap, nodeList, edgeList, nextId] = addInputEdges(blockName, ports, nodeMap, nodeList, edgeList, nextId)
-    numDataPorts = 0;
+    blockType = get_param(blockName, 'BlockType');
+    isSubsystem = strcmp(blockType, 'SubSystem');
 
-    % Handle data input ports
     if isfield(ports, 'Inport')
-        numDataPorts = length(ports.Inport);
-        for p = 1:numDataPorts
+        for p = 1:length(ports.Inport)
             inNodeName = sprintf('%s_in%d', blockName, p);
 
             [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
                 nodeMap, nodeList, inNodeName, blockName, p, 'input', nextId);
 
-            edgeList = addEdge(edgeList, nodeMap(inNodeName), nodeMap(blockName));
+            % Skip edge to subsystem block
+            if ~isSubsystem
+                edgeList = addEdge(edgeList, nodeMap(inNodeName), nodeMap(blockName));
+            end
 
             line = get_param(ports.Inport(p), 'Line');
             [nodeMap, nodeList, edgeList, nextId] = handleInputLineSource( ...
@@ -65,33 +67,8 @@ function [nodeMap, nodeList, edgeList, nextId] = addInputEdges(blockName, ports,
         end
     end
 
-    % Handle control ports (Enable, Trigger, Action)
-    controlTypes = {'Enable', 'Trigger', 'Action'};
-    for ct = 1:length(controlTypes)
-        type = controlTypes{ct};
-        if isfield(ports, type)
-            controlHandles = ports.(type);
-            if ~iscell(controlHandles)
-                controlHandles = num2cell(controlHandles);
-            end
-            for c = 1:length(controlHandles)
-                portHandle = controlHandles{c};
-                portNumber = numDataPorts + c;
-                inNodeName = sprintf('%s_%s%d', blockName, lower(type), c);
-
-                [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
-                    nodeMap, nodeList, inNodeName, blockName, portNumber, 'input', nextId);
-
-                edgeList = addEdge(edgeList, nodeMap(inNodeName), nodeMap(blockName));
-
-                line = get_param(portHandle, 'Line');
-                [nodeMap, nodeList, edgeList, nextId] = handleInputLineSource( ...
-                    inNodeName, line, nodeMap, nodeList, edgeList, nextId);
-            end
-        end
-    end
+    % Handle control ports (Enable, Trigger, Action) if needed
 end
-
 
 function [nodeMap, nodeList, edgeList, nextId] = handleInputLineSource(inNodeName, line, nodeMap, nodeList, edgeList, nextId)
     if line ~= -1 && line ~= 0
@@ -142,18 +119,21 @@ function [nodeMap, nodeList, nextId] = createPortNodeIfNeeded(nodeMap, nodeList,
 end
 
 function [nodeMap, nodeList, edgeList, nextId] = addOutputEdges(blockName, ports, nodeMap, nodeList, edgeList, nextId)
+    blockType = get_param(blockName, 'BlockType');
+    isSubsystem = strcmp(blockType, 'SubSystem');
+
     if isfield(ports, 'Outport')
         for p = 1:length(ports.Outport)
             outNodeName = sprintf('%s_out%d', blockName, p);
 
-            % Create output port node if needed
             [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
                 nodeMap, nodeList, outNodeName, blockName, p, 'output', nextId);
 
-            % Add edge from block to output port
-            edgeList = addEdge(edgeList, nodeMap(blockName), nodeMap(outNodeName));
+            % Skip edge from subsystem block
+            if ~isSubsystem
+                edgeList = addEdge(edgeList, nodeMap(blockName), nodeMap(outNodeName));
+            end
 
-            % Handle destinations of the output line
             line = get_param(ports.Outport(p), 'Line');
             if line ~= -1 && line ~= 0
                 [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations( ...
