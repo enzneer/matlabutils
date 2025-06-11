@@ -99,9 +99,9 @@ function [nodeMap, nodeList, edgeList, nextId] = handleInputLineSource(inNodeNam
         srcBlock = get_param(srcPort, 'Parent');
         srcBlockType = get_param(srcBlock, 'BlockType');
 
-        if strcmp(srcBlockType, 'SubSystem')
-            % Trace through subsystem's Outport
-            portNum = get_param(srcPort, 'PortNumber');
+        portNum = get_param(srcPort, 'PortNumber');
+
+        if strcmp(srcBlockType, 'SubSystem') || strcmp(srcBlockType, 'Outport')
             realSrcPorts = traceThroughOutport(srcBlock, portNum);
             for k = 1:length(realSrcPorts)
                 realSrcBlock = get_param(realSrcPorts{k}, 'Parent');
@@ -113,30 +113,12 @@ function [nodeMap, nodeList, edgeList, nextId] = handleInputLineSource(inNodeNam
                     nodeMap, nodeList, outNodeName, realSrcBlockName, realSrcPortNum, 'output', nextId);
                 edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(inNodeName));
             end
-
-        elseif strcmp(srcBlockType, 'Outport')
-            % Skip edge from Outport block itself
-            % Instead trace back to the actual source inside the subsystem
-            portNum = get_param(srcPort, 'PortNumber');
-            realSrcPorts = traceThroughOutport(srcBlock, portNum);
-            for k = 1:length(realSrcPorts)
-                realSrcBlock = get_param(realSrcPorts{k}, 'Parent');
-                realSrcBlockName = getfullname(realSrcBlock);
-                realSrcPortNum = get_param(realSrcPorts{k}, 'PortNumber');
-                outNodeName = sprintf('%s_out%d', realSrcBlockName, realSrcPortNum);
-
-                [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
-                    nodeMap, nodeList, outNodeName, realSrcBlockName, realSrcPortNum, 'output', nextId);
-                edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(inNodeName));
-            end
-
-        elseif ~ismember(srcBlockType, {'Inport'})
+        else
             srcBlockName = getfullname(srcBlock);
-            srcPortNum = get_param(srcPort, 'PortNumber');
-            outNodeName = sprintf('%s_out%d', srcBlockName, srcPortNum);
+            outNodeName = sprintf('%s_out%d', srcBlockName, portNum);
 
             [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
-                nodeMap, nodeList, outNodeName, srcBlockName, srcPortNum, 'output', nextId);
+                nodeMap, nodeList, outNodeName, srcBlockName, portNum, 'output', nextId);
             edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(inNodeName));
         end
     end
@@ -192,9 +174,7 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
         dstBlockType = get_param(dstBlock, 'BlockType');
         portNum = get_param(dstPorts{j}, 'PortNumber');
 
-        [shouldSkip, traceThrough] = shouldSkipOrTraceBlock(dstBlockType);
-
-        if traceThrough
+        if strcmp(dstBlockType, 'SubSystem') || strcmp(dstBlockType, 'Inport')
             realDstPorts = traceThroughInport(dstBlock, portNum);
             for k = 1:length(realDstPorts)
                 realDstBlock = get_param(realDstPorts{k}, 'Parent');
@@ -206,28 +186,12 @@ function [nodeMap, nodeList, edgeList, nextId] = handleOutputLineDestinations(ou
                     nodeMap, nodeList, dstNodeName, realDstBlockName, realDstPortNum, 'input', nextId);
                 edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(dstNodeName));
             end
-
-        elseif strcmp(dstBlockType, 'Outport')
-            % Trace through Outport to find internal source
-            realDstPorts = traceThroughInport(dstBlock, portNum);
-            for k = 1:length(realDstPorts)
-                realDstBlock = get_param(realDstPorts{k}, 'Parent');
-                realDstBlockName = getfullname(realDstBlock);
-                realDstPortNum = get_param(realDstPorts{k}, 'PortNumber');
-                dstNodeName = sprintf('%s_in%d', realDstBlockName, realDstPortNum);
-
-                [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
-                    nodeMap, nodeList, dstNodeName, realDstBlockName, realDstPortNum, 'input', nextId);
-                edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(dstNodeName));
-            end
-
-        elseif ~shouldSkip
+        else
             dstBlockName = getfullname(dstBlock);
-            dstPortNum = get_param(dstPorts{j}, 'PortNumber');
-            dstNodeName = sprintf('%s_in%d', dstBlockName, dstPortNum);
+            dstNodeName = sprintf('%s_in%d', dstBlockName, portNum);
 
             [nodeMap, nodeList, nextId] = createPortNodeIfNeeded( ...
-                nodeMap, nodeList, dstNodeName, dstBlockName, dstPortNum, 'input', nextId);
+                nodeMap, nodeList, dstNodeName, dstBlockName, portNum, 'input', nextId);
             edgeList = addEdge(edgeList, nodeMap(outNodeName), nodeMap(dstNodeName));
         end
     end
@@ -294,17 +258,17 @@ function verboseEdges = createVerboseEdges(graph)
         idToName(node.id) = formattedName;
     end
 
-    % Replace numeric IDs with formatted names
+    % Replace numeric IDs with formatted names and include IDs
     verboseEdges = cell(size(graph.Edges, 1), 1);
     for i = 1:size(graph.Edges, 1)
         srcId = graph.Edges(i, 1);
         dstId = graph.Edges(i, 2);
         verboseEdges{i} = struct( ...
-            'source', idToName(srcId), ...
-            'target', idToName(dstId));
+            'source', struct('id', srcId, 'name', idToName(srcId)), ...
+            'target', struct('id', dstId, 'name', idToName(dstId)) ...
+        );
     end
 end
-
 
 function prettyStr = prettyPrintJSON(jsonStr)
     indent = '    ';
