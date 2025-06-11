@@ -48,7 +48,9 @@ end
 function [nodeMap, nodeList, edgeList, nextId] = addInputEdges(blockName, ports, nodeMap, nodeList, edgeList, nextId)
     blockType = get_param(blockName, 'BlockType');
     isSubsystem = strcmp(blockType, 'SubSystem');
-
+    if isSubsystem
+        return;
+    end
     if isfield(ports, 'Inport')
         for p = 1:length(ports.Inport)
             inNodeName = sprintf('%s_in%d', blockName, p);
@@ -121,7 +123,9 @@ end
 function [nodeMap, nodeList, edgeList, nextId] = addOutputEdges(blockName, ports, nodeMap, nodeList, edgeList, nextId)
     blockType = get_param(blockName, 'BlockType');
     isSubsystem = strcmp(blockType, 'SubSystem');
-
+    if isSubsystem 
+        return;
+    end
     if isfield(ports, 'Outport')
         for p = 1:length(ports.Outport)
             outNodeName = sprintf('%s_out%d', blockName, p);
