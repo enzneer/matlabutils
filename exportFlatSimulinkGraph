@@ -472,4 +472,3 @@ function srcPorts = traceThroughOutport(subsystem, portNum)
         end
     end
 end
-
