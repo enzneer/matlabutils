@@ -316,9 +316,19 @@ end
 
 
 function dstPorts = traceThroughInport(subsystem, portNum)
-    dstPorts = {};
-    inports = find_system(subsystem, 'SearchDepth', 1, 'BlockType', 'Inport');
+    visited = containers.Map();
+    dstPorts = traceInportRecursive(subsystem, portNum, visited);
+end
 
+function dstPorts = traceInportRecursive(subsystem, portNum, visited)
+    dstPorts = {};
+    key = sprintf('%s:%d', subsystem, portNum);
+    if isKey(visited, key)
+        return;
+    end
+    visited(key) = true;
+
+    inports = find_system(subsystem, 'SearchDepth', 1, 'BlockType', 'Inport');
     for i = 1:length(inports)
         if str2double(get_param(inports{i}, 'Port')) == portNum
             portHandles = get_param(inports{i}, 'PortHandles');
@@ -333,8 +343,7 @@ function dstPorts = traceThroughInport(subsystem, portNum)
                     dstBlockType = get_param(dstBlock, 'BlockType');
                     if strcmp(dstBlockType, 'SubSystem')
                         nestedPortNum = get_param(nextDstPorts{j}, 'PortNumber');
-                        nestedDstPorts = traceThroughInport(dstBlock, nestedPortNum);
-                        dstPorts = [dstPorts nestedDstPorts];
+                        dstPorts = [dstPorts, traceInportRecursive(dstBlock, nestedPortNum, visited)];
                     else
                         dstPorts{end+1} = nextDstPorts{j};
                     end
@@ -346,33 +355,119 @@ function dstPorts = traceThroughInport(subsystem, portNum)
 end
 
 function dstPorts = traceThroughOutport(outportBlk)
+    visited = containers.Map();
+    dstPorts = traceOutportRecursive(outportBlk, visited);
+end
+
+function dstPorts = traceOutportRecursive(outportBlk, visited)
     dstPorts = {};
-    parentDstBlock = get_param(outportBlk, 'Parent');
+    blockPath = getfullname(outportBlk);
     portNum = str2double(get_param(outportBlk, 'Port'));
+    key = sprintf('%s:%d', blockPath, portNum);
+
+    if isKey(visited, key)
+        return;
+    end
+    visited(key) = true;
+
+    parentDstBlock = get_param(outportBlk, 'Parent');
     portHandles = get_param(parentDstBlock, 'PortHandles');
-    outLine = get_param(portHandles.Outport, 'Line');
-    if outLine ~= -1 && outLine ~= 0
-        nextDstPorts = get_param(outLine, 'DstPortHandle');
-        if ~iscell(nextDstPorts)
-            nextDstPorts = {nextDstPorts};
-        end
-        for j = 1:length(nextDstPorts)
-            dstBlock = get_param(nextDstPorts{j}, 'Parent');
-            dstBlockType = get_param(dstBlock, 'BlockType');
-            if strcmp(dstBlockType, 'SubSystem')
-                nestedPortNum = get_param(nextDstPorts{j}, 'PortNumber');
-                nestedDstPorts = traceThroughInport(dstBlock, nestedPortNum);
-                dstPorts = [dstPorts nestedDstPorts];
-            elseif strcmp(dstBlockType, 'Outport') && isBlockInsideSubsystem(dstBlock)
-                nestedDstPorts = traceThroughOutport(dstBlock);
-                dstPorts = [dstPorts nestedDstPorts];
-            else
-                dstPorts{end+1} = nextDstPorts{j};
+    outputportnum = getSubsystemPortHandleFromOutportBlock(outportBlk);
+    outLine = get_param(outputportnum, 'Line');
+
+    % Normalize to cell array
+    if ~iscell(outLine)
+        outLine = {outLine};
+    end
+
+    for i = 1:length(outLine)
+        line = outLine{i};
+        if isnumeric(line) && line ~= -1 && line ~= 0
+            nextDstPorts = get_param(line, 'DstPortHandle');
+            if ~iscell(nextDstPorts)
+                nextDstPorts = {nextDstPorts};
+            end
+            for j = 1:length(nextDstPorts)
+                dstBlock = get_param(nextDstPorts{j}, 'Parent');
+                dstBlockType = get_param(dstBlock, 'BlockType');
+                if strcmp(dstBlockType, 'SubSystem')
+                    nestedPortNum = get_param(nextDstPorts{j}, 'PortNumber');
+                    dstPorts = [dstPorts, traceInportRecursive(dstBlock, nestedPortNum, visited)];
+                elseif strcmp(dstBlockType, 'Outport') && isBlockInsideSubsystem(dstBlock)
+                    dstPorts = [dstPorts, traceOutportRecursive(dstBlock, visited)];
+                else
+                    dstPorts{end+1} = nextDstPorts{j};
+                end
             end
         end
     end
-
 end
 
+function portHandle = getSubsystemPortHandleFromOutportBlock(outportBlk)
+    % Get the parent subsystem of the Outport block
+    parentSubsystem = get_param(outportBlk, 'Parent');
+
+    % Get the port number of the Outport block
+    portNum = str2double(get_param(outportBlk, 'Port'));
+
+    % Get the port handles of the parent subsystem
+    subsystemPorts = get_param(parentSubsystem, 'PortHandles');
+
+    % Return the corresponding Outport handle on the subsystem
+    if isfield(subsystemPorts, 'Outport') && length(subsystemPorts.Outport) >= portNum
+        portHandle = subsystemPorts.Outport(portNum);
+    else
+        error('Invalid port number or missing Outport handle on subsystem.');
+    end
+end
+
+function portBlocks = resolveSubsystemPortBlocks(subsystem)
+    % Get external port handles
+    ph = get_param(subsystem, 'PortHandles');
+    portBlocks = struct();
+
+    % Define mapping of port handle fields to internal block types
+    portMap = {
+        'Inport',     'Inport';
+        'Outport',    'Outport';
+        'Enable',     'EnablePort';
+        'Trigger',    'TriggerPort';
+        'Ifaction',   'IfactionPort';
+        'Reset',      'ResetPort';
+        'State',      'StatePort';
+        'Event',      'EventListenerPort';
+        'LConn',      'LConnPort';  % Left connection (used in some special blocks)
+        'RConn',      'RConnPort';  % Right connection
+    };
 
 
+    for i = 1:size(portMap, 1)
+        field = portMap{i, 1};
+        blockType = portMap{i, 2};
+
+        % Get external handles
+        if isfield(ph, field)
+            handles = ph.(field);
+            if isempty(handles)
+                portBlocks.(field) = [];
+                continue;
+            end
+
+            % Find internal blocks of this type
+            internalBlocks = find_system(subsystem, ...
+                'SearchDepth', 1, ...
+                'LookUnderMasks', 'all', ...
+                'FollowLinks', 'on',...
+                'BlockType', blockType);
+
+            % Sort internal blocks by their Port parameter (if available)
+            if ismember(blockType, {'Inport', 'Outport'})
+                [~, idx] = sort(cellfun(@(b) str2double(get_param(b, 'Port')), internalBlocks));
+                internalBlocks = internalBlocks(idx);
+            end
+
+            % Return block handles in the same order as external handles
+            portBlocks.(field) = cellfun(@(b) get_param(b, 'Handle'), internalBlocks);
+        end
+    end
+end
